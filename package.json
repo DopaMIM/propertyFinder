@@ -1,0 +1,22 @@
+{
+  "name": "redfin-lubbock-feed",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "scrape": "node index.js",
+    "playwright:install": "playwright install chromium",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "googleapis": "^162.0.0",
+    "lodash": "^4.17.21",
+    "playwright": "^1.56.0"
+  }
+}

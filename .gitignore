@@ -1,0 +1,19 @@
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Env and secrets
+.env
+key.json
+
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Builds/coverage
+dist/
+build/
+coverage/
+
