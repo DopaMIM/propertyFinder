@@ -73,6 +73,17 @@ function parseSearchUrls(raw) {
   return out;
 }
 
+function extractFilterTerm(searchUrl) {
+  const match = String(searchUrl || '').match(/remarks=([^,]+)/i);
+  if (!match) return '';
+  const raw = match[1];
+  try {
+    return decodeURIComponent(raw.replace(/\+/g, ' '));
+  } catch {
+    return raw.replace(/\+/g, ' ');
+  }
+}
+
 function parseCsv(str) {
   const rows = [];
   let i = 0, field = '', row = [], inQuotes = false;
@@ -175,7 +186,7 @@ async function fetchCsvForSearchUrl(searchUrl) {
     if (!csvRes.ok) throw new Error(`csv ${csvRes.status}`);
     const csvText = await csvRes.text();
     const rows = parseCsv(csvText);
-    return rows.length ? mapCsvRows(rows) : [];
+    return rows.length ? { mappedRows: mapCsvRows(rows), csvRows: rows } : { mappedRows: [], csvRows: [] };
   }
 
   // 1) load the search page
@@ -206,10 +217,11 @@ async function fetchCsvForSearchUrl(searchUrl) {
   });
   if (!csvRes.ok) throw new Error(`csv ${csvRes.status}`);
   const csvText = await csvRes.text();
-  const rows = parseCsv(csvText);
-  if (!rows.length) return [];
 
-  return mapCsvRows(rows);
+  const rows = parseCsv(csvText);
+  if (!rows.length) return { mappedRows: [], csvRows: [] };
+
+  return { mappedRows: mapCsvRows(rows), csvRows: rows };
 }
 
 /** Public API used by index.js */
@@ -217,30 +229,31 @@ export async function fetchListings() {
   const raw = (process.env.SEARCH_URLS || '').trim();
   if (!raw) {
     console.warn('SEARCH_URLS is empty - nothing to fetch.');
-    return [];
+    return { listings: [], csvSlices: [] };
   }
   // Extract URLs robustly by http-boundaries (handles commas within filters)
   const urls = parseSearchUrls(raw);
 
-  const all = [];
+  const dedup = new Map();
+  const csvSlices = [];
   for (const u of urls) {
     try {
-      const rows = await fetchCsvForSearchUrl(u);
-      rows.forEach(r => (r.source_search = u));
-      all.push(...rows);
-      console.log(`OK: ${u} -> +${rows.length} rows`);
+      const { mappedRows, csvRows } = await fetchCsvForSearchUrl(u);
+      if (csvRows.length) {
+        csvSlices.push({ url: u, rows: csvRows, term: extractFilterTerm(u) });
+      }
+      mappedRows.forEach(r => {
+        r.source_search = u;
+        const key = r.url || r.address;
+        if (!dedup.has(key)) dedup.set(key, r);
+      });
+      console.log(`OK: ${u} -> +${mappedRows.length} rows`);
     } catch (e) {
       console.warn(`FAIL: ${u} -> ${e.message}`);
     }
     await new Promise(r => setTimeout(r, 350));
   }
 
-  // de-dupe by URL (fallback address)
-  const dedup = new Map();
-  for (const r of all) {
-    const key = r.url || r.address;
-    if (!dedup.has(key)) dedup.set(key, r);
-  }
-  return Array.from(dedup.values());
+  return { listings: Array.from(dedup.values()), csvSlices };
 }
 

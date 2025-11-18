@@ -4,7 +4,7 @@ import { fetchListings } from './scrape.js';
 import { normalize } from './normalize.js';
 import { diffRecords } from './diff.js';
 import { google } from 'googleapis';
-import fs from 'fs/promises'; // only used for optional debug
+import { urls as generatedUrls } from './urls.js';
 
 // --- Sheets client (we already validated auth; re-implement here for a single-file run) ---
 async function getSheetsClient() {
@@ -28,7 +28,7 @@ async function getSheetsClient() {
 async function ensureTabs(sheets, spreadsheetId) {
   const { data } = await sheets.spreadsheets.get({ spreadsheetId });
   const have = new Set(data.sheets.map(s => s.properties.title));
-  const wanted = ['live_feed', 'changes_log'];
+  const wanted = ['live_feed', 'changes_log', 'raw_feed'];
   const requests = [];
   for (const t of wanted) if (!have.has(t)) requests.push({ addSheet: { properties: { title: t } } });
   if (requests.length) {
@@ -59,6 +59,31 @@ async function writeLiveFeed(sheets, spreadsheetId, rows) {
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: 'live_feed!A1',
+    valueInputOption: 'RAW',
+    requestBody: { values }
+  });
+}
+
+async function writeRawFeed(sheets, spreadsheetId, csvSlices) {
+  if (!csvSlices.length) return;
+  const values = [];
+  csvSlices.forEach((slice, idx) => {
+    const rows = slice.rows.slice(1); // skip header
+    let added = false;
+    rows.forEach(row => {
+      const copy = row.slice();
+      if (copy.length < 2) copy.length = 2;
+      copy[1] = slice.term || '';
+      values.push(copy);
+      added = true;
+    });
+    if (added && idx !== csvSlices.length - 1) values.push([]);
+  });
+  if (!values.length) return;
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: 'raw_feed' });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: 'raw_feed!A1',
     valueInputOption: 'RAW',
     requestBody: { values }
   });
@@ -96,13 +121,11 @@ async function main() {
   let spreadsheetId = (process.env.GOOGLE_SHEETS_ID || '').trim();
   // strip accidental surrounding quotes and trailing comma
   spreadsheetId = spreadsheetId.replace(/^['"]|['"]$/g, '').replace(/,+$/,'');
-  // Prefer urls.txt if present; else SEARCH_URLS or legacy REDFIN_SEARCH_URL
-  const { default: fsSync } = await import('fs');
+  // Prefer programmatic URLs from urls.js; fall back to env vars for legacy flows.
   let searchUrls = '';
-  if (fsSync.existsSync('urls.txt')) {
-    const rawFile = fsSync.readFileSync('urls.txt', 'utf8');
-    searchUrls = rawFile.replace(/\r?\n/g, ' ').trim();
-    console.log('Loaded URLs from urls.txt');
+  if (Array.isArray(generatedUrls) && generatedUrls.length) {
+    searchUrls = generatedUrls.join(',');
+    console.log(`Loaded ${generatedUrls.length} URLs from urls.js`);
   } else {
     searchUrls = (process.env.SEARCH_URLS || process.env.REDFIN_SEARCH_URL || '').trim();
   }
@@ -113,16 +136,17 @@ async function main() {
   process.env.SEARCH_URLS = searchUrls;
 
   console.log('Fetching listings from Redfin CSV...');
-  const raw = await fetchListings();
-  console.log(`Fetched ${raw.length} listings`);
+  const { listings, csvSlices } = await fetchListings();
+  console.log(`Fetched ${listings.length} listings`);
 
-  const normalized = raw.map(normalize);
+  const normalized = listings.map(normalize);
 
   const sheets = await getSheetsClient();
   await ensureTabs(sheets, spreadsheetId);
   const prev = await readLiveFeed(sheets, spreadsheetId);
 
   const { merged, changes } = diffRecords(prev, normalized);
+  await writeRawFeed(sheets, spreadsheetId, csvSlices);
   await writeLiveFeed(sheets, spreadsheetId, merged);
   await appendChanges(sheets, spreadsheetId, changes);
 
